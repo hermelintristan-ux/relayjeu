@@ -21,7 +21,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 PORT     = int(os.environ.get("PORT", 10000))
 ROOM_TTL = 300
 GAME_TTL = 7200
-POLL_MAX = 25
+POLL_MAX = 4    # Render coupe les connexions longues — on garde court et on re-poll vite
 
 _MOTS = [
     "TIGRE", "LOUP", "AIGLE", "REQUIN", "PANDA", "COBRA", "LYNX", "BISON",
@@ -233,10 +233,16 @@ def _keepalive_loop(port):
 
 
 def main():
+    from socketserver import ThreadingMixIn
+
+    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        """Chaque requete est traitee dans son propre thread — indispensable
+        pour que les long-polls de J1 ne bloquent pas le /join de J2."""
+        daemon_threads = True
+
     port = int(os.environ.get("PORT", PORT))
-    server = HTTPServer(("0.0.0.0", port), RelayHandler)
-    # Rendre le serveur multi-thread pour les long-polls simultanees
-    server.timeout = POLL_MAX + 5
+    server = ThreadedHTTPServer(("0.0.0.0", port), RelayHandler)
+    server.timeout = POLL_MAX + 3
 
     threading.Thread(target=_keepalive_loop, args=(port,), daemon=True).start()
 
