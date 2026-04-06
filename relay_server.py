@@ -23,13 +23,6 @@ ROOM_TTL = 300
 GAME_TTL = 7200
 POLL_MAX = 4    # Render coupe les connexions longues — on garde court et on re-poll vite
 
-_MOTS = [
-    "TIGRE", "LOUP", "AIGLE", "REQUIN", "PANDA", "COBRA", "LYNX", "BISON",
-    "PHOQUE", "RENARD", "VAUTOUR", "JAGUAR", "COYOTE", "DINGO", "FALCON",
-    "GECKO", "HYENE", "IBIS", "JOKER", "KIWI", "LEMUR", "MORSE", "NARVAL",
-    "ORQUE", "PAON", "QUOKKA", "RATON", "SINGE", "TAPIR", "URUBU",
-]
-
 
 class Room:
     def __init__(self, code):
@@ -76,7 +69,7 @@ class RoomManager:
     def create(self):
         with self._lock:
             for _ in range(200):
-                code = f"{random.choice(_MOTS)}-{random.randint(10, 99)}"
+                code = f"{random.randint(0, 99):02d}"
                 if code not in self._rooms:
                     room = Room(code)
                     self._rooms[code] = room
