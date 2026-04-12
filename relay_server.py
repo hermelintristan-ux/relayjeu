@@ -164,7 +164,7 @@ class RelayHandler(BaseHTTPRequestHandler):
                 pid = int(query.get("pid", 0))
             except ValueError:
                 pid = 0
-            if not code or pid not in (1, 2):
+            if not code or pid < 1 or pid > MAX_PLAYERS:
                 self._send_error_json("Parametres manquants")
                 return
             room = rooms.get(code)
@@ -200,8 +200,9 @@ class RelayHandler(BaseHTTPRequestHandler):
             if pid is None:
                 self._send_error_json("Room pleine.")
                 return
-            # Notifier J1 (et tous les joueurs déjà présents) qu'un nouveau joueur a rejoint
-            room.push(1, {"type": "relay_ready", "player_id": pid, "n_players": room.n_players})
+            # Notifier TOUS les joueurs déjà présents qu'un nouveau joueur a rejoint
+            for existing_pid in range(1, pid):
+                room.push(existing_pid, {"type": "relay_ready", "player_id": pid, "n_players": room.n_players})
             if room.n_players >= 2:
                 room.started = True
             self._send_json({"type": "room_joined", "code": room.code, "player_id": pid})
