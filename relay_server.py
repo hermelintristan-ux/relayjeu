@@ -22,6 +22,7 @@ PORT     = int(os.environ.get("PORT", 10000))
 ROOM_TTL = 300
 GAME_TTL = 7200
 POLL_MAX = 4    # Render coupe les connexions longues — on garde court et on re-poll vite
+MAX_PLAYERS = 6
 
 
 class Room:
@@ -30,19 +31,21 @@ class Room:
         self.created   = time.time()
         self.started   = False
         self.n_players = 0
+        self.max_players = MAX_PLAYERS  # sera mis à jour par l'hôte via /set_max
         self.lock      = threading.Lock()
-        self.queues    = [queue.Queue(), queue.Queue()]
-        self.last_seen = [time.time(), time.time()]
+        # Queues pour jusqu'à MAX_PLAYERS joueurs
+        self.queues    = [queue.Queue() for _ in range(MAX_PLAYERS)]
+        self.last_seen = [time.time()] * MAX_PLAYERS
 
     def add_player(self):
         with self.lock:
-            if self.n_players >= 2:
+            if self.n_players >= self.max_players:
                 return None
             self.n_players += 1
             return self.n_players
 
     def is_full(self):
-        return self.n_players >= 2
+        return self.n_players >= self.max_players
 
     def is_expired(self):
         if self.started:
@@ -50,7 +53,19 @@ class Room:
         return (time.time() - self.created) > ROOM_TTL
 
     def push(self, to_player_id, msg):
+        """Envoie un message à un joueur spécifique (player_id 1-based)."""
         self.queues[to_player_id - 1].put(msg)
+
+    def broadcast(self, from_player_id, msg):
+        """Diffuse un message à tous les joueurs sauf l'émetteur."""
+        for pid in range(1, self.n_players + 1):
+            if pid != from_player_id:
+                self.queues[pid - 1].put(msg)
+
+    def broadcast_all(self, msg):
+        """Diffuse un message à tous les joueurs connectés."""
+        for pid in range(1, self.n_players + 1):
+            self.queues[pid - 1].put(msg)
 
     def poll(self, player_id, timeout=POLL_MAX):
         self.last_seen[player_id - 1] = time.time()
@@ -185,10 +200,28 @@ class RelayHandler(BaseHTTPRequestHandler):
             if pid is None:
                 self._send_error_json("Room pleine.")
                 return
-            room.push(1, {"type": "relay_ready", "player_id": 1})
-            room.started = True
+            # Notifier J1 (et tous les joueurs déjà présents) qu'un nouveau joueur a rejoint
+            room.push(1, {"type": "relay_ready", "player_id": pid, "n_players": room.n_players})
+            if room.n_players >= 2:
+                room.started = True
             self._send_json({"type": "room_joined", "code": room.code, "player_id": pid})
-            print(f"[Relay] Room {room.code} — J2 a rejoint.")
+            print(f"[Relay] Room {room.code} — J{pid} a rejoint ({room.n_players}/{room.max_players}).")
+
+        elif path == "/set_max":
+            # L'hôte définit le nombre max de joueurs attendus (2-6)
+            code = body.get("code", "").upper().strip()
+            try:
+                max_p = int(body.get("max_players", 2))
+            except (ValueError, TypeError):
+                max_p = 2
+            max_p = max(2, min(MAX_PLAYERS, max_p))
+            room = rooms.get(code)
+            if room is None:
+                self._send_error_json("Room introuvable.")
+                return
+            with room.lock:
+                room.max_players = max_p
+            self._send_json({"ok": True, "max_players": max_p})
 
         elif path == "/send":
             code = body.get("code", "").upper().strip()
@@ -197,15 +230,38 @@ class RelayHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 pid = 0
             msg = body.get("msg")
-            if not code or pid not in (1, 2) or msg is None:
+            if not code or pid < 1 or pid > MAX_PLAYERS or msg is None:
                 self._send_error_json("Parametres manquants")
                 return
             room = rooms.get(code)
             if room is None:
                 self._send_error_json("Room introuvable.")
                 return
-            other_pid = 2 if pid == 1 else 1
-            room.push(other_pid, msg)
+            # Envoyer à un destinataire précis ou broadcaster selon le champ "to"
+            to = body.get("to")  # None = broadcast à tous sauf l'émetteur
+            if to is not None:
+                try:
+                    to_pid = int(to)
+                    room.push(to_pid, msg)
+                except (ValueError, TypeError):
+                    self._send_error_json("Parametre 'to' invalide")
+                    return
+            else:
+                room.broadcast(pid, msg)
+            self._send_json({"ok": True})
+
+        elif path == "/broadcast_all":
+            # Diffuse à TOUS les joueurs y compris l'émetteur (utilisé pour game_start)
+            code = body.get("code", "").upper().strip()
+            msg  = body.get("msg")
+            if not code or msg is None:
+                self._send_error_json("Parametres manquants")
+                return
+            room = rooms.get(code)
+            if room is None:
+                self._send_error_json("Room introuvable.")
+                return
+            room.broadcast_all(msg)
             self._send_json({"ok": True})
 
         else:
